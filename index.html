@@ -64,6 +64,13 @@
   .dot.full { background: linear-gradient(135deg, var(--rose), var(--gold)); opacity: 1; border-color: transparent; }
   .dot.grief { background: var(--bg-card); border: 2px solid var(--gold); position: relative; }
   .dot.grief::after { content: '♥'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--gold); }
+  .dot.minimal { background: var(--bg-card); border: 2px dashed var(--text-muted); }
+  .count-sub { font-size: 11px; color: var(--text-muted); font-weight: 500; margin-left: 4px; }
+  .minimal-trigger { display: block; width: 100%; margin: -8px 0 16px; padding: 6px; background: none; border: none; color: var(--text-muted); font-family: 'Quicksand', sans-serif; font-size: 12px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+  .minimal-overlay { display: none; flex-direction: column; align-items: center; gap: 14px; background: var(--bg-elevated); border-radius: 20px; padding: 28px 20px; margin-bottom: 18px; }
+  .minimal-big-btn { width: 100%; padding: 26px; border-radius: 18px; border: none; background: linear-gradient(135deg, var(--rose), var(--gold)); color: #fff; font-family: 'Quicksand', sans-serif; font-size: 17px; font-weight: 700; cursor: pointer; }
+  .minimal-cancel { background: none; border: none; color: var(--text-muted); font-family: 'Quicksand', sans-serif; font-size: 12px; text-decoration: underline; cursor: pointer; }
+  .minimal-done { font-family: 'Quicksand', sans-serif; font-size: 15px; font-weight: 700; color: var(--text); text-align: center; padding: 16px 0; }
   .dot.today { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--gold); }
 
   .toggle { display: flex; gap: 6px; margin: 6px 0 20px; background: var(--bg-elevated); padding: 6px; border-radius: 999px; }
@@ -170,6 +177,11 @@
   </div>
 
   <button id="griefToggle" class="grief-btn">Mark today as a grief day</button>
+  <button id="minimalTrigger" class="minimal-trigger">Everything feels like too much →</button>
+  <div id="minimalOverlay" class="minimal-overlay">
+    <button id="minimalBigButton" class="minimal-big-btn">Something happened</button>
+    <button id="minimalCancel" class="minimal-cancel">Never mind, back to normal</button>
+  </div>
 
   <div class="progress-row"><span class="count" id="progressCount">— / —</span><span class="save-status" id="saveStatus" style="opacity:0;">Saved ✓</span></div>
   <div class="streak-row" id="streakRow"></div>
@@ -472,45 +484,54 @@
     return {done, total};
   }
 
+  function weatherLabel(done, total) {
+    if (total === 0) return 'No data yet';
+    const ratio = done / total;
+    if (ratio >= 0.8) return 'Clear skies ☀️';
+    if (ratio >= 0.4) return 'Partly sunny ⛅';
+    if (ratio > 0) return 'Overcast ☁️';
+    return 'Foggy 🌫️';
+  }
+
   function updateProgressUI() {
+    if (dayState.griefDay) return;
+    if (dayState.minimal) {
+      document.getElementById('progressCount').textContent = 'Showed up today — that counts';
+      return;
+    }
     const {done, total} = computeProgress();
-    document.getElementById('progressCount').textContent = done + ' / ' + total + ' done today';
+    document.getElementById('progressCount').innerHTML = `${weatherLabel(done, total)}<span class="count-sub">${done}/${total}</span>`;
+  }
+
+  async function syncHistoryEntry() {
+    const {done, total} = computeProgress();
+    let hist = await loadHistory();
+    const idx = hist.findIndex(h => h.date === todayKey);
+    const entry = {date: todayKey, done, total, grief: !!dayState.griefDay, minimal: !!dayState.minimal};
+    if (idx >= 0) hist[idx] = entry;
+    else hist.push(entry);
+    hist = hist.slice(-60);
+    await saveHistory(hist);
+    renderStreak(hist);
+    renderMilestone(countEngaged(hist));
   }
 
   async function onToggle(id, checked) {
     dayState[id] = checked;
     await saveDay(todayKey, dayState);
     updateProgressUI();
-    const {done, total} = computeProgress();
-    let hist = await loadHistory();
-    const idx = hist.findIndex(h => h.date === todayKey);
-    const entry = {date: todayKey, done, total, grief: !!dayState.griefDay};
-    if (idx >= 0) hist[idx] = entry;
-    else hist.push(entry);
-    hist = hist.slice(-60);
-    await saveHistory(hist);
-    renderStreak(hist);
-    renderMilestone(countEngaged(hist));
+    await syncHistoryEntry();
   }
 
   function countEngaged(hist) {
-    return hist.filter(h => (h.grief || h.done > 0) && new Date(h.date + 'T00:00:00') >= CHALLENGE_START).length;
+    return hist.filter(h => (h.grief || h.minimal || h.done > 0) && new Date(h.date + 'T00:00:00') >= CHALLENGE_START).length;
   }
 
   async function toggleGrief() {
     dayState.griefDay = !dayState.griefDay;
     await saveDay(todayKey, dayState);
     applyGriefUI();
-    const {done, total} = computeProgress();
-    let hist = await loadHistory();
-    const idx = hist.findIndex(h => h.date === todayKey);
-    const entry = {date: todayKey, done, total, grief: !!dayState.griefDay};
-    if (idx >= 0) hist[idx] = entry;
-    else hist.push(entry);
-    hist = hist.slice(-60);
-    await saveHistory(hist);
-    renderStreak(hist);
-    renderMilestone(countEngaged(hist));
+    await syncHistoryEntry();
   }
 
   function applyGriefUI() {
@@ -527,6 +548,23 @@
   }
   document.getElementById('griefToggle').addEventListener('click', toggleGrief);
 
+  document.getElementById('minimalTrigger').addEventListener('click', () => {
+    document.getElementById('minimalOverlay').style.display = 'flex';
+  });
+  document.getElementById('minimalCancel').addEventListener('click', () => {
+    document.getElementById('minimalOverlay').style.display = 'none';
+  });
+  document.getElementById('minimalBigButton').addEventListener('click', async () => {
+    dayState.minimal = true;
+    await saveDay(todayKey, dayState);
+    await syncHistoryEntry();
+    updateProgressUI();
+    const overlay = document.getElementById('minimalOverlay');
+    overlay.innerHTML = '<div class="minimal-done">Logged. That\'s enough for today. 🤍</div>';
+    setTimeout(() => { overlay.style.display = 'none'; }, 2200);
+  });
+
+
   async function onChoice(choiceKey, value) {
     dayState[choiceKey] = value;
     await saveDay(todayKey, dayState);
@@ -542,6 +580,8 @@
       let cls = 'dot';
       if (entry && entry.grief) {
         cls += ' grief';
+      } else if (entry && entry.minimal && !(entry.done > 0)) {
+        cls += ' minimal';
       } else if (entry && entry.total > 0) {
         const ratio = entry.done / entry.total;
         cls += ratio >= 0.8 ? ' full' : (ratio > 0 ? ' partial' : '');
@@ -571,8 +611,10 @@
     let html = `<b>${label}</b>`;
     if (entry && entry.grief) {
       html += `<span class="dd-line">Marked as a grief day 🤍</span>`;
+    } else if (entry && entry.minimal && !(entry.done > 0)) {
+      html += `<span class="dd-line">Showed up, minimal mode — that counted</span>`;
     } else if (entry) {
-      html += `<span class="dd-line">${entry.done} of ${entry.total} done</span>`;
+      html += `<span class="dd-line">${weatherLabel(entry.done, entry.total)} — ${entry.done} of ${entry.total} done</span>`;
     } else {
       html += `<span class="dd-line">No data logged this day</span>`;
     }
